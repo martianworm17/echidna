@@ -185,75 +185,90 @@ function orchestrate(spec, token) {
   var resultLocation = argResultLocation + path.sep + spec.id + '.json';
   var httpLocation = argHttpLocation + '/' + spec.id + '/Overview.html';
 
-  function runSpecberus() {
-    return SpecberusWrapper.validate(httpLocation);
-  }
-
-  function runTokenChecker(report) {
-    if (report.errors.isEmpty()) {
-      console.log('Specberus SUCCESS');
-      return TokenChecker.check(report.metadata.get('latestVersion'), token);
-    }
-    else {
-      console.log('Specberus FAILURE');
-      return Promise.reject(new Error('This document has failed Specberus.'));
-    }
-  }
-
-  function runThirdPartyResourcesChecker(authReport, url) {
-    var matchSource = url.substring(
-      0,
-      authReport.source.length
-    ) === authReport.source;
-
-    if (authReport.authorized && matchSource) {
-      console.log('TokenChecker SUCCESS');
-      return ThirdPartyResourcesChecker.check(httpLocation);
-    }
-    else {
-      console.log('TokenChecker FAILURE');
-      console.log(authReport);
-      return Promise.reject(
-        new Error('You are not allowed to publish this document.')
-      );
-    }
-  }
-
-  function runPublisher(extResources, specberusReport) {
-    if (extResources.length === 0) {
-      console.log('ThirdPartyResourcesChecker SUCCESS');
-      return specberusReport.then(function (report) {
-        var pubsystemService = new JsonHttpService(
-          global.W3C_PUBSYSTEM_URL,
-          global.USERNAME,
-          global.PASSWORD
-        );
-        return new Publisher(pubsystemService).publish(report.metadata);
+  function runSpecberus(httpLocation) {
+    return SpecberusWrapper.validate(httpLocation)
+      .then(function (report) {
+        if (report.errors.isEmpty()) {
+          console.log('Specberus SUCCESS');
+          return Promise.resolve(report);
+        }
+        else {
+          console.log('Specberus FAILURE');
+          console.log(report.errors.toJSON());
+          return Promise.reject(
+            new Error('This document has failed Specberus.')
+          );
+        }
       });
-    }
-    else {
-      console.log('ThirdPartyResourcesChecker FAILURE');
-      return Promise.reject(
-        new Error('There are external resources in this document.')
-      );
-    }
   }
 
-  function runTrInstaller(errors, specberusReport) {
-    if (errors.isEmpty()) {
-      console.log('Publisher SUCCESS');
-      return specberusReport.then(function (report) {
-        var finalTRpath = report.metadata.get('thisVersion')
-          .replace(W3C_PREFIX, '');
-        return trInstaller(tempLocation, finalTRpath);
+  function runTokenChecker(report, url) {
+    return TokenChecker.check(report.metadata.get('latestVersion'), token)
+      .then(function (authReport) {
+        var matchSource =
+          url.substring(0, authReport.source.length) === authReport.source;
+        if (authReport.authorized && matchSource) {
+          console.log('TokenChecker SUCCESS');
+          return Promise.resolve(authReport);
+        }
+        else {
+          console.log('TokenChecker FAILURE');
+          console.log(authReport);
+          return Promise.reject(
+            new Error('You are not allowed to publish this document.')
+          );
+        }
       });
-    }
-    else {
-      console.log('Publisher FAILED');
-      return Promise.reject(
-        new Error('There was a problem with the publication system.')
+  }
+
+  function runThirdPartyResourcesChecker(httpLocation) {
+    return ThirdPartyResourcesChecker.check(httpLocation)
+      .then(function (extResources) {
+        if (extResources.length === 0) {
+          console.log('ThirdPartyResourcesChecker SUCCESS');
+          return Promise.resolve(extResources);
+        }
+        else {
+          console.log('ThirdPartyResourcesChecker FAILURE');
+          console.log(extResources);
+          return Promise.reject(
+            new Error('There are external resources in this document.')
+          );
+        }
+      });
+  }
+
+  function runPublisher(specberusReport) {
+    return specberusReport.then(function (report) {
+      var pubsystemService = new JsonHttpService(
+        global.W3C_PUBSYSTEM_URL,
+        global.USERNAME,
+        global.PASSWORD
       );
-    }
+
+      return new Publisher(pubsystemService).publish(report.metadata)
+        .then(function (errors) {
+          if (errors.isEmpty()) {
+            console.log('Publisher SUCCESS');
+            return Promise.resolve(errors);
+          }
+          else {
+            console.log('Publisher FAILED');
+            console.log(errors.toJSON());
+            return Promise.reject(
+              new Error('There was a problem with the publication system.')
+            );
+          }
+        });
+    });
+  }
+
+  function runTrInstaller(specberusReport, tempLocation) {
+    return specberusReport.then(function (report) {
+      var finalTRpath = report.metadata.get('thisVersion')
+        .replace(W3C_PREFIX, '');
+      return trInstaller(tempLocation, finalTRpath);
+    });
   }
 
   function runShortlink(specberusReport) {
@@ -262,7 +277,7 @@ function orchestrate(spec, token) {
     });
   }
 
-  function finishTasks(specberusReport) {
+  function finishTasks(specberusReport, spec, resultLocation) {
     return specberusReport.then(function (report) {
       var cmd =
         global.SENDMAIL + ' SUCCESS ' + global.MAILING_LIST + ' ' +
@@ -281,24 +296,27 @@ function orchestrate(spec, token) {
   var specberusReport = DocumentDownloader.fetchAndInstall(
     spec.url,
     tempLocation
-  ).then(runSpecberus);
+  ).then(function () {
+    return runSpecberus(httpLocation);
+  });
 
   return specberusReport
-    .then(runTokenChecker)
-    .then(function (authReport) {
-      return runThirdPartyResourcesChecker(authReport, spec.url);
+    .then(function (report) {
+      return runTokenChecker(report, spec.url);
+    }).then(function () {
+      return runThirdPartyResourcesChecker(httpLocation);
     })
-    .then(function (extResources) {
-      return runPublisher(extResources, specberusReport);
+    .then(function () {
+      return runPublisher(specberusReport);
     })
-    .then(function (errors) {
-      return runTrInstaller(errors, specberusReport);
+    .then(function () {
+      return runTrInstaller(specberusReport, tempLocation);
     })
     .then(function () {
       return runShortlink(specberusReport);
     })
     .then(function () {
-      return finishTasks(specberusReport);
+      return finishTasks(specberusReport, spec, resultLocation);
     })
     .catch(function (err) {
       console.log(err.stack);
