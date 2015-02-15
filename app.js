@@ -216,22 +216,37 @@ function orchestrate(spec, token) {
       });
   }
 
-  function runTokenChecker(report, url) {
+  function runTokenChecker(report, url, spec) {
+    spec.jobs['token-checker'].status = 'pending';
+
     return TokenChecker.check(report.metadata.get('latestVersion'), token)
       .then(function (authReport) {
         var matchSource =
           url.substring(0, authReport.source.length) === authReport.source;
+
         if (authReport.authorized && matchSource) {
-          console.log('TokenChecker SUCCESS');
+          spec.jobs['token-checker'].status = 'ok';
+          spec.history = spec.history.add('You are authorized to publish');
+
           return Promise.resolve(authReport);
         }
         else {
-          console.log('TokenChecker FAILURE');
-          console.log(authReport);
+          spec.jobs['token-checker'].status = 'failure';
+          spec.jobs['token-checker'].errors.push('Not authorized');
+          spec.history = spec.history.add('You are not authorized to publish');
+
           return Promise.reject(
             new Error('You are not allowed to publish this document.')
           );
         }
+      }).catch(function (error) {
+        spec.jobs['token-checker'].status = 'error';
+        spec.jobs['token-checker'].errors.push(error.toString());
+        spec.history = spec.history.add(
+          'An error occurred while running the Token Checker.'
+        );
+
+        return Promise.reject(error);
       });
   }
 
@@ -316,7 +331,7 @@ function orchestrate(spec, token) {
 
   return specberusReport
     .then(function (report) {
-      return runTokenChecker(report, spec.url);
+      return runTokenChecker(report, spec.url, spec);
     }).then(function () {
       return runThirdPartyResourcesChecker(httpLocation);
     })
@@ -352,10 +367,6 @@ function orchestrate(spec, token) {
     spec.jobs['retrieve-resources'].status = 'ok';
     spec.history = spec.history.add('The file has been retrieved.');
 
-      spec.jobs['token-checker'].status = 'pending';
-
-        spec.jobs['token-checker'].status = 'ok';
-        spec.history = spec.history.add('You are authorized to publish');
         spec.jobs['third-party-checker'].status = 'pending';
 
           spec.jobs['third-party-checker'].status = 'ok';
@@ -387,13 +398,6 @@ function orchestrate(spec, token) {
             spec.jobs['publish'].status = 'error';
             spec.jobs['publish'].errors.push(err.toString());
             spec.history = spec.history.add('The document could not be published: ' + err.message);
-
-          spec.jobs['token-checker'].status = 'failure';
-          spec.jobs['token-checker'].errors.push('Not authorized');
-          spec.history = spec.history.add('You are not authorized to publish');
-
-          spec.jobs['token-checker'].status = 'error';
-          spec.jobs['token-checker'].errors.push(err.toString());
 
         spec.history = spec.history.add('The document contains non-authorized resources');
         spec.jobs['third-party-checker'].status = 'failure';
