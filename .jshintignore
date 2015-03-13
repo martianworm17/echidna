@@ -1,8 +1,10 @@
-coverage
-node_modules
 **/bower_components
 *.min.js
 Gruntfile.js
+assets/scripts/*.min.js
+assets/scripts/behaviour.js
 config.js
-test/views
+coverage
+node_modules
 test/test.js
+test/views
